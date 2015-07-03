@@ -105,9 +105,6 @@ pub struct LayoutTaskData {
     /// The root stacking context.
     pub stacking_context: Option<Arc<StackingContext>>,
 
-    /// Performs CSS selector matching and style resolution.
-    pub stylist: Box<Stylist>,
-
     /// The workers that we use for parallel operation.
     pub parallel_traversal: Option<WorkQueue<SharedLayoutContextWrapper, WorkQueueData>>,
 
@@ -205,6 +202,9 @@ pub struct LayoutTask {
     ///
     /// All the other elements of this struct are read-only.
     pub rw_data: Arc<Mutex<LayoutTaskData>>,
+
+    /// Performs CSS selector matching and style resolution.
+    pub stylist: Arc<Mutex<Stylist>>,
 }
 
 impl LayoutTaskFactory for LayoutTask {
@@ -343,7 +343,6 @@ impl LayoutTask {
                     constellation_chan: constellation_chan,
                     screen_size: screen_size,
                     stacking_context: None,
-                    stylist: box Stylist::new(device),
                     parallel_traversal: parallel_traversal,
                     dirty: Rect::zero(),
                     generation: 0,
@@ -355,6 +354,7 @@ impl LayoutTask {
                     new_animations_sender: new_animations_sender,
                     epoch: Epoch(0),
               })),
+          stylist: Arc::new(Mutex::new(Stylist::new(device))),
         }
     }
 
@@ -383,7 +383,7 @@ impl LayoutTask {
             layout_chan: self.chan.clone(),
             font_cache_task: self.font_cache_task.clone(),
             canvas_layers_sender: self.canvas_layers_sender.clone(),
-            stylist: &*rw_data.stylist,
+            stylist: self.stylist.clone(),
             url: (*url).clone(),
             reflow_root: reflow_root.map(|node| node.opaque()),
             dirty: Rect::zero(),
@@ -687,14 +687,15 @@ impl LayoutTask {
         // GWTODO: Need to handle unloading web fonts (when we handle unloading stylesheets!)
 
         let mut rw_data = self.lock_rw_data(possibly_locked_rw_data);
+        let mut stylist = self.stylist.lock().unwrap();
 
-        if mq.evaluate(&rw_data.stylist.device) {
-            for font_face in sheet.effective_rules(&rw_data.stylist.device).font_face() {
+        if mq.evaluate(&stylist.device) {
+            for font_face in sheet.effective_rules(&stylist.device).font_face() {
                 for source in font_face.sources.iter() {
                     self.font_cache_task.add_web_font(font_face.family.clone(), source.clone());
                 }
             }
-            rw_data.stylist.add_stylesheet(sheet);
+            stylist.add_stylesheet(sheet);
         }
 
         LayoutTask::return_rw_data(possibly_locked_rw_data, rw_data);
@@ -705,7 +706,8 @@ impl LayoutTask {
                                   possibly_locked_rw_data:
                                     &mut Option<MutexGuard<'a, LayoutTaskData>>) {
         let mut rw_data = self.lock_rw_data(possibly_locked_rw_data);
-        rw_data.stylist.add_quirks_mode_stylesheet();
+        let mut stylist = self.stylist.lock().unwrap();
+        stylist.add_quirks_mode_stylesheet();
         LayoutTask::return_rw_data(possibly_locked_rw_data, rw_data);
     }
 
@@ -926,16 +928,17 @@ impl LayoutTask {
         if screen_size_changed {
             // Calculate the actual viewport as per DEVICE-ADAPT § 6
             let device = Device::new(MediaType::Screen, initial_viewport);
-            rw_data.stylist.set_device(device);
+            let mut stylist = self.stylist.lock().unwrap();
+            stylist.set_device(device);
 
-            if let Some(constraints) = rw_data.stylist.constrain_viewport() {
+            if let Some(constraints) = stylist.constrain_viewport() {
                 debug!("Viewport constraints: {:?}", constraints);
 
                 // other rules are evaluated against the actual viewport
                 rw_data.screen_size = Size2D::new(Au::from_f32_px(constraints.size.width.get()),
                                                   Au::from_f32_px(constraints.size.height.get()));
                 let device = Device::new(MediaType::Screen, constraints.size);
-                rw_data.stylist.set_device(device);
+                stylist.set_device(device);
 
                 // let the constellation know about the viewport constraints
                 let ConstellationChan(ref constellation_chan) = rw_data.constellation_chan;
@@ -945,7 +948,8 @@ impl LayoutTask {
         }
 
         // If the entire flow tree is invalid, then it will be reflowed anyhow.
-        let needs_dirtying = rw_data.stylist.update();
+        let mut stylist = self.stylist.lock().unwrap();
+        let needs_dirtying = stylist.update();
         let needs_reflow = screen_size_changed && !needs_dirtying;
         unsafe {
             if needs_dirtying {
@@ -965,7 +969,7 @@ impl LayoutTask {
                                                                          &self.url,
                                                                          data.reflow_info.goal);
 
-        if node.is_dirty() || node.has_dirty_descendants() || rw_data.stylist.is_dirty() {
+        if node.is_dirty() || node.has_dirty_descendants() || stylist.is_dirty() {
             // Recalculate CSS styles and rebuild flows and fragments.
             profile(time::ProfilerCategory::LayoutStyleRecalc,
                     self.profiler_metadata(),
