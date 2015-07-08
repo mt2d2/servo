@@ -1055,13 +1055,6 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
     if type.nullable():
         declType = CGWrapper(declType, pre="Option<", post=">")
 
-    # XXXjdm support conversionBehavior here
-    template = (
-        "match FromJSValConvertible::from_jsval(cx, ${val}, ()) {\n"
-        "    Ok(v) => v,\n"
-        "    Err(_) => { %s }\n"
-        "}" % exceptionCode)
-
     if defaultValue is not None:
         if isinstance(defaultValue, IDLNullValue):
             assert type.nullable()
@@ -1078,6 +1071,24 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
                 defaultStr = "Some(%s)" % defaultStr
     else:
         defaultStr = None
+
+    #XXXjdm support conversionBehavior here
+    if defaultStr is not None and defaultStr != "None":
+        template = (
+            "if ${val}.get().is_null_or_undefined() {\n"
+            "    %s\n"
+            "} else {\n"
+            "    match FromJSValConvertible::from_jsval(cx, ${val}, ()) {\n"
+            "        Ok(v) => v,\n"
+            "        Err(_) => { %s }\n"
+            "    }\n"
+            "}" % (defaultStr, exceptionCode))
+    else:
+        template = (
+            "match FromJSValConvertible::from_jsval(cx, ${val}, ()) {\n"
+            "    Ok(v) => v,\n"
+            "    Err(_) => { %s }\n"
+            "}" % exceptionCode)
 
     return handleOptional(template, declType, defaultStr)
 
