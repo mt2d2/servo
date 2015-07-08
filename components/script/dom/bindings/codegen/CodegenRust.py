@@ -1044,12 +1044,6 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
     if type.nullable():
         declType = CGWrapper(declType, pre="Option<", post=">")
 
-    template = (
-        "match FromJSValConvertible::from_jsval(cx, ${val}, %s) {\n"
-        "    Ok(v) => v,\n"
-        "    Err(_) => { %s }\n"
-        "}" % (conversionBehavior, exceptionCode))
-
     if defaultValue is not None:
         if isinstance(defaultValue, IDLNullValue):
             assert type.nullable()
@@ -1066,6 +1060,27 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
                 defaultStr = "Some(%s)" % defaultStr
     else:
         defaultStr = None
+
+    if defaultStr is not None and defaultStr != "None":
+        # If undefined is explicitly passed into a parameter that has a default
+        # value specified in the WebIDL (and the default value is not None), we
+        # should ignore undefined and use the default value. The same does not
+        # apply to null.
+        template = (
+            "if ${val}.get().is_null_or_undefined() {\n"
+            "    %s\n"
+            "} else {\n"
+            "    match FromJSValConvertible::from_jsval(cx, ${val}, %s) {\n"
+            "        Ok(v) => v,\n"
+            "        Err(_) => { %s }\n"
+            "    }\n"
+            "}" % (defaultStr, conversionBehavior, exceptionCode))
+    else:
+        template = (
+            "match FromJSValConvertible::from_jsval(cx, ${val}, %s) {\n"
+            "    Ok(v) => v,\n"
+            "    Err(_) => { %s }\n"
+            "}" % (conversionBehavior, exceptionCode))
 
     return handleOptional(template, declType, defaultStr)
 
