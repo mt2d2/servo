@@ -1067,7 +1067,7 @@ def getJSToNativeConversionInfo(type, descriptorProvider, failureCode=None,
         # should ignore undefined and use the default value. The same does not
         # apply to null.
         template = (
-            "if ${val}.get().is_null_or_undefined() {\n"
+            "if ${val}.get().is_undefined() {\n"
             "    %s\n"
             "} else {\n"
             "    match FromJSValConvertible::from_jsval(cx, ${val}, %s) {\n"
